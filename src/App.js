@@ -1,542 +1,849 @@
-import React, { useState, useEffect } from 'react';
+// frontend/src/App.js
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import './App.css';
-import de10Image from './de10-lite.jpg';
-import lampImg from './lamp.jpg';
-import semiImg from './semi.jpg';
-import servoImg from './servo.jpg';
-import { useAuth } from './AuthContext';
-import { apiFetch } from './api';
+import BoardMap from './components/BoardMap';
+import PeripheralMenu from './components/PeripheralMenu';
+import {
+  apiFetch,
+  API_BASE,
+  getStoredToken,
+  getStoredUser,
+  setStoredAuth,
+  clearStoredAuth,
+} from './api';
 
-// Примерные данные периферий и их пинов (теперь из perif.csv)
+// Описание периферии с цветами (можно скорректировать цвета)
 const peripherals = [
-  {
-    name: 'Arduino MEGA',
-    pins: ['22', '24', '26', '28', '30', '32', '34', '36', '38', '40', '42', '44'],
-  },
-  {
-    name: 'LED-массив',
-    pins: ['led1', 'led2', 'led3', 'led4', 'led5', 'led6', 'led7', 'RGB1', 'RGB2', 'RGB3'],
-  },
-  {
-    name: 'Семисегментник',
-    pins: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'DP', 'DIG1', 'DIG2', 'DIG3', 'DIG4'],
-  },
-  {
-    name: 'Сервопривод',
-    pins: ['serv1'],
-  },
+  { name: 'Кнопки', pins: ['22','24','26','28','30','32','34','36','38','40','42','44'], color: '#FF7043' }, // orange
+  { name: 'LED', pins: ['led1','led2','led3','led4','led5','led6','led7','RGB1','RGB2','RGB3'], color: '#FFEB3B' }, // yellow
+  { name: 'Семисегментный дисплей', pins: ['A','B','C','D','E','F','G','DP','DIG1','DIG2','DIG3','DIG4'], color: '#4FC3F7' }, // light blue
+  { name: 'Сервопривод', pins: ['serv1'], color: '#A1887F' } // brown/steel
 ];
 
-// Пины DE10-Lite (разделение на левый и правый ряд, по 18 пинов)
 const de10PinsLeft = [
-  'V10', 'V9', 'V8', 'V7', 'W6', 'W5', 'AA14', 'W12', 'AB12', 'AB11', 'AB10', 'AA9', 'AA8', 'AA7', 'AA6', 'AA5', 'AB3', 'AB2'
+  'V10','V9','V8','V7','W6','5V','W5','AA14','W12','AB12','AB11','AB10','AA9','AA8','3.3V','AA7','AA6','AA5','AB3','AB2'
 ];
 const de10PinsRight = [
-  'W10', 'W9', 'W8', 'W7', 'V5', 'AA15', 'W13', 'AB13', 'Y11', 'W11', 'AA10', 'Y8', 'Y7', 'Y6', 'Y5', 'Y4', 'Y3', 'AA2'
+  'W10','W9','W8','W7','V5','GND','AA15','W13','AB13','Y11','W11','AA10','Y8','Y7','GND2','Y6','Y5','Y4','Y3','AA2'
 ];
+const nonInteractivePins = ['5V', '3.3V', 'GND', 'GND2'];
+const powerPinsHighlightColor = '#E91E63';
+const buildDefaultPeripheralLimits = () => Object.fromEntries(peripherals.map(peripheral => [peripheral.name, peripheral.pins.length]));
 
 function App() {
-  const { user, login, logout, isAdmin, isLab } = useAuth();
-  const [selectedPin, setSelectedPin] = useState(null);
-  const [connections, setConnections] = useState([]);
-  const [showSelector, setShowSelector] = useState(false);
-  const [showCodeModal, setShowCodeModal] = useState(false);
-  const [code, setCode] = useState('');
-  const [buttonStates, setButtonStates] = useState(
-    Array.from({ length: 12 }, (_, i) => ({ id: `but${i + 1}`, pressed: false }))
-  );
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [uploadStatus, setUploadStatus] = useState('');
-  const [saveStatus, setSaveStatus] = useState('');
-  const [sofFiles, setSofFiles] = useState([]);
-  const [selectedSof, setSelectedSof] = useState('');
-  const [showLoginModal, setShowLoginModal] = useState(false);
-  const [loginForm, setLoginForm] = useState({ login: '', password: '' });
-  const [loginError, setLoginError] = useState('');
-  const [disabledPeripherals, setDisabledPeripherals] = useState([]); // для лаборанта
-  const [adminUploadStatus, setAdminUploadStatus] = useState('');
+  const [currentPage, setCurrentPage] = useState(() => window.location.pathname || '/');
+  const [authUser, setAuthUser] = useState(() => getStoredUser());
+  const [authError, setAuthError] = useState('');
   const [adminDe10File, setAdminDe10File] = useState(null);
   const [adminPerifFile, setAdminPerifFile] = useState(null);
+  const [adminUploadStatus, setAdminUploadStatus] = useState('');
+  const [peripheralLimits, setPeripheralLimits] = useState(buildDefaultPeripheralLimits);
+  const [labLimitValues, setLabLimitValues] = useState(buildDefaultPeripheralLimits);
+  const [labValidationError, setLabValidationError] = useState('');
+  const [labExportStatus, setLabExportStatus] = useState('');
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    setLoginError('');
-    try {
-      await login(loginForm.login, loginForm.password);
-      setShowLoginModal(false);
-      setLoginForm({ login: '', password: '' });
-    } catch (err) {
-      setLoginError(err.message || 'Ошибка входа');
+  // State
+  const [connections, setConnections] = useState([]); // { peripheral, peripheralPin, de10Pin }
+  const [showPeripheralMenu, setShowPeripheralMenu] = useState(false);
+  const [selectedPeripheral, setSelectedPeripheral] = useState(null); // { peripheral, peripheralPin }
+  const [selectedDe10, setSelectedDe10] = useState(null);
+  const [pendingDe10Pin, setPendingDe10Pin] = useState(null);
+
+  // SOF upload / files
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [uploadStatus, setUploadStatus] = useState('');
+  const [sofFiles, setSofFiles] = useState([]);
+  const [selectedSof, setSelectedSof] = useState('');
+  const [saveStatus, setSaveStatus] = useState('');
+  const [schemeStatus, setSchemeStatus] = useState('');
+  const schemeFileInputRef = useRef(null);
+
+  const boardConfig = useMemo(() => ({
+    name: 'DE10-Lite',
+    leftPins: de10PinsLeft,
+    rightPins: de10PinsRight
+  }), []);
+
+  // Peripheral color map for BoardMap legend
+  const peripheralColorMap = useMemo(() => {
+    const map = {};
+    peripherals.forEach(p => map[p.name] = p.color);
+    return map;
+  }, []);
+
+  // pinColorMap: de10Pin -> color (derived from connections)
+  const pinColorMap = useMemo(() => {
+    const m = {};
+    connections.forEach(c => {
+      const p = peripherals.find(pp => pp.name === c.peripheral);
+      if (p && p.color) m[c.de10Pin] = p.color;
+    });
+    return m;
+  }, [connections]);
+
+  // pinTooltipMap: de10Pin -> connected peripheral name
+  const pinTooltipMap = useMemo(() => {
+    const m = {};
+    connections.forEach(c => {
+      m[c.de10Pin] = c.peripheral;
+    });
+    return m;
+  }, [connections]);
+
+  // ---- backend calls and helpers (copied/adapted from original) ----
+
+  const getPeripheralPinLabel = (peripheralName, peripheralPin) => {
+    if (peripheralName === 'Кнопки') {
+      const idx = peripherals.find(p => p.name === 'Кнопки')?.pins.indexOf(peripheralPin);
+      return idx !== undefined && idx >= 0 ? `Кнопка ${idx + 1}` : peripheralPin;
     }
+    const match = String(peripheralPin).match(/(?:but|button)(\d+)/i);
+    return match ? `Кнопка ${match[1]}` : peripheralPin;
   };
 
-  const handleAdminUploadTables = async () => {
-    if (!adminDe10File || !adminPerifFile) {
-      setAdminUploadStatus('Выберите оба файла: de10lite.csv и perif.csv');
+  // File upload
+  const handleFileUpload = async (ev) => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    setSelectedFile(file);
+    if (!file.name.toLowerCase().endsWith('.sof')) {
+      setUploadStatus('Ошибка: поддерживаются только файлы формата .sof');
       return;
     }
-    setAdminUploadStatus('Загрузка...');
+    setUploadStatus('Загрузка...');
     try {
-      const fd = new FormData();
-      fd.append('de10lite', adminDe10File);
-      fd.append('perif', adminPerifFile);
-      const r = await apiFetch('/admin/upload_tables', { method: 'POST', body: fd });
-      const data = await r.json();
-      if (r.ok) {
-        setAdminUploadStatus('Таблицы загружены');
-        setAdminDe10File(null);
-        setAdminPerifFile(null);
-      } else {
-        setAdminUploadStatus(data.error + (data.details ? ': ' + data.details.join(', ') : ''));
-      }
-    } catch (err) {
-      setAdminUploadStatus('Ошибка: ' + err.message);
-    }
-  };
-
-  const togglePeripheralDisabled = (name) => {
-    setDisabledPeripherals(prev =>
-      prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]
-    );
-  };
-
-  const isPeripheralEnabled = (name) => !disabledPeripherals.includes(name);
-
-  const handlePinClick = (peripheralIdx, pinIdx) => {
-    if (!isPeripheralEnabled(peripherals[peripheralIdx].name)) return;
-    const peripheral = peripherals[peripheralIdx].name;
-    const peripheralPin = peripherals[peripheralIdx].pins[pinIdx];
-    
-    // Проверяем, есть ли уже соединение для этого пина
-    const existingConnection = connections.find(
-      c => c.peripheral === peripheral && c.peripheralPin === peripheralPin
-    );
-    
-    // Если соединение существует, удаляем его
-    if (existingConnection) {
-      setConnections(prev => prev.filter(
-        c => !(c.peripheral === peripheral && c.peripheralPin === peripheralPin)
-      ));
-    } else {
-      // Если соединения нет, показываем селектор для выбора нового пина
-      setSelectedPin({ peripheralIdx, pinIdx });
-      setShowSelector(true);
-    }
-  };
-
-  const handleDe10PinSelect = (de10Pin) => {
-    const { peripheralIdx, pinIdx } = selectedPin;
-    const peripheral = peripherals[peripheralIdx].name;
-    const peripheralPin = peripherals[peripheralIdx].pins[pinIdx];
-    
-    // Добавляем новое соединение
-    setConnections((prev) => [
-      ...prev.filter(
-        (c) => !(c.peripheral === peripheral && c.peripheralPin === peripheralPin)
-      ),
-      { peripheral, peripheralPin, de10Pin },
-    ]);
-    setShowSelector(false);
-    setSelectedPin(null);
-  };
-
-  const sendButtonState = async (buttonId, pressed) => {
-    try {
-      await fetch('http://localhost:5050/api/buttons/state', {
+      const fm = new FormData();
+      fm.append('file', file);
+      const resp = await apiFetch('/api/pins/upload_sof', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ buttonId, pressed })
+        body: fm,
+        auth: false,
       });
-    } catch (error) {
-      console.error('Ошибка отправки состояния кнопки:', error);
-    }
-  };
-
-  const toggleButton = (buttonId) => {
-    setButtonStates(prev =>
-      prev.map(btn => {
-        if (btn.id === buttonId) {
-          const newPressed = !btn.pressed;
-          sendButtonState(buttonId, newPressed);
-          return { ...btn, pressed: newPressed };
-        }
-        return btn;
-      })
-    );
-  };
-
-  // Получить список занятых пинов DE10-lite
-  const usedDe10Pins = connections.map((c) => c.de10Pin);
-
-  const handleFileUpload = async (event) => {
-    const file = event.target.files[0];
-    if (file) {
-      console.log('Выбран файл:', file.name);
-      
-      // Проверяем расширение файла
-      if (!file.name.toLowerCase().endsWith('.sof')) {
-        console.log('Неверное расширение файла');
-        setUploadStatus('Ошибка: поддерживаются только файлы формата .sof');
-        return;
+      const json = await resp.json();
+      if (resp.ok) {
+        setUploadStatus('Файл успешно загружен');
+        fetchSofFiles();
+      } else {
+        setUploadStatus('Ошибка загрузки: ' + (json.error || 'unknown'));
       }
-
-      setSelectedFile(file);
-      setUploadStatus('Загрузка...');
-
-      try {
-        // Создаем FormData для отправки файла
-        const formData = new FormData();
-        formData.append('file', file);
-        console.log('Отправка файла на сервер...');
-
-        // Отправляем файл на сервер
-        const response = await fetch('http://localhost:5050/api/pins/upload_sof', {
-          method: 'POST',
-          body: formData,
-        });
-
-        console.log('Ответ сервера:', response.status);
-        const result = await response.json();
-        console.log('Результат:', result);
-
-        if (response.ok) {
-          setUploadStatus('Файл успешно загружен');
-        } else {
-          throw new Error(result.error || 'Ошибка загрузки файла');
-        }
-      } catch (error) {
-        console.error('Ошибка при загрузке файла:', error);
-        setUploadStatus('Ошибка загрузки файла: ' + error.message);
-      }
+    } catch (e) {
+      setUploadStatus('Ошибка: ' + e.message);
     }
   };
 
   const fetchSofFiles = async () => {
     try {
-      const filesResp = await fetch('http://localhost:5050/api/pins/sof_files');
-      const filesData = await filesResp.json();
-      setSofFiles(filesData.files || []);
-    } catch (error) {
+      const resp = await apiFetch('/api/pins/sof_files', { auth: false });
+      const json = await resp.json();
+      setSofFiles(json.files || []);
+    } catch (e) {
       setSofFiles([]);
     }
   };
 
   useEffect(() => {
     fetchSofFiles();
-  }, [uploadStatus]); // обновлять список после загрузки
+    handleLoad();
+    // eslint-disable-next-line
+  }, []);
+
+  useEffect(() => {
+    const token = getStoredToken();
+    if (!token) return;
+    (async () => {
+      try {
+        const r = await apiFetch('/api/auth/me');
+        const j = await r.json();
+        if (!j.user) {
+          clearStoredAuth();
+          setAuthUser(null);
+          return;
+        }
+        const u = { login: j.user.login, role: j.user.role };
+        setAuthUser(u);
+        setStoredAuth(token, u);
+      } catch {
+        clearStoredAuth();
+        setAuthUser(null);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentPage(window.location.pathname || '/');
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigateTo = (path) => {
+    window.history.pushState({}, '', path);
+    setCurrentPage(path);
+  };
+
+  const handleAuthSubmit = async (event) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const login = String(formData.get('login') || '').trim();
+    const password = String(formData.get('password') || '').trim();
+    setAuthError('');
+    try {
+      const r = await apiFetch('/api/auth/login', {
+        method: 'POST',
+        json: { login, password },
+        auth: false,
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        setAuthError(j.error || 'Ошибка входа');
+        return;
+      }
+      setStoredAuth(j.token, { login: j.login, role: j.role });
+      setAuthUser({ login: j.login, role: j.role });
+      if (j.role === 'admin') navigateTo('/admin');
+      else if (j.role === 'lab_assistant') navigateTo('/lab');
+      else navigateTo('/');
+    } catch (e) {
+      setAuthError(e.message || `Не удалось связаться с API (${API_BASE})`);
+    }
+  };
+
+  const handleAdminDe10Change = (event) => {
+    const file = event.target.files?.[0] || null;
+    setAdminDe10File(file);
+    setAdminUploadStatus('');
+  };
+
+  const handleAdminPerifChange = (event) => {
+    const file = event.target.files?.[0] || null;
+    setAdminPerifFile(file);
+    setAdminUploadStatus('');
+  };
+
+  const handleAdminUploadTables = async () => {
+    if (!adminDe10File || !adminPerifFile) {
+      setAdminUploadStatus('Нужны оба файла: de10lite.csv и perif.csv');
+      return;
+    }
+    if (!adminDe10File.name.toLowerCase().endsWith('.csv') || !adminPerifFile.name.toLowerCase().endsWith('.csv')) {
+      setAdminUploadStatus('Оба файла должны быть в формате .csv');
+      return;
+    }
+    setAdminUploadStatus('Отправка…');
+    try {
+      const fd = new FormData();
+      fd.append('de10lite', adminDe10File);
+      fd.append('perif', adminPerifFile);
+      const r = await apiFetch('/api/admin/upload_tables', { method: 'POST', body: fd });
+      const j = await r.json();
+      if (!r.ok) {
+        const detail = j.details ? ` ${JSON.stringify(j.details)}` : '';
+        setAdminUploadStatus(`Ошибка: ${j.error || r.status}${detail}`);
+        return;
+      }
+      setAdminUploadStatus('Таблицы успешно загружены на сервер.');
+      setAdminDe10File(null);
+      setAdminPerifFile(null);
+    } catch (e) {
+      setAdminUploadStatus(`Ошибка сети: ${e.message}`);
+    }
+  };
+
+  const handleLabLimitChange = (peripheralName, rawValue) => {
+    const peripheral = peripherals.find(item => item.name === peripheralName);
+    if (!peripheral) return;
+
+    if (rawValue === '') {
+      setLabLimitValues(prev => ({ ...prev, [peripheralName]: '' }));
+      return;
+    }
+
+    const parsed = Number(rawValue);
+    if (!Number.isInteger(parsed)) return;
+
+    const bounded = Math.min(peripheral.pins.length, Math.max(0, parsed));
+    setLabLimitValues(prev => ({ ...prev, [peripheralName]: bounded }));
+  };
+
+  const applyLabLimits = async () => {
+    const nextLimits = sanitizePeripheralLimits(labLimitValues);
+    const hasInvalid = peripherals.some(peripheral => {
+      const raw = labLimitValues[peripheral.name];
+      return raw === '' || Number(raw) < 0 || Number(raw) > peripheral.pins.length;
+    });
+    if (hasInvalid) {
+      setLabValidationError('Проверьте лимиты: только целые числа от 0 до максимума для каждого типа периферии.');
+      return;
+    }
+
+    const disabled = peripherals.filter((p) => nextLimits[p.name] === 0).map((p) => p.name);
+    setLabValidationError('');
+    setLabExportStatus('');
+    try {
+      const r = await apiFetch('/api/pins/config', {
+        method: 'POST',
+        json: { peripheral_limits: nextLimits, disabled_peripherals: disabled },
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        setLabValidationError(j.error || 'Не удалось сохранить лимиты на сервере');
+        return;
+      }
+    } catch (e) {
+      setLabValidationError(e.message || 'Ошибка сети');
+      return;
+    }
+
+    setPeripheralLimits(nextLimits);
+    setLabLimitValues(nextLimits);
+    setConnections((prev) => enforcePeripheralLimits(prev, nextLimits));
+    setLabExportStatus('Лимиты сохранены на сервере.');
+  };
+
+  const exportLabConfig = () => {
+    const nextLimits = sanitizePeripheralLimits(labLimitValues);
+    const configToExport = {
+      version: 1,
+      type: 'lab-peripheral-limits',
+      createdBy: 'lab',
+      createdAt: new Date().toISOString(),
+      peripheralLimits: nextLimits
+    };
+
+    const json = JSON.stringify(configToExport, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'lab-peripheral-limits.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setLabExportStatus('Файл конфигурации лаборанта выгружен.');
+  };
 
   const handleProgramDe10 = async () => {
     if (!selectedSof) return;
     setUploadStatus('Программирование...');
     try {
-      const response = await fetch('http://localhost:5050/api/pins/program_de10', {
+      const resp = await apiFetch('/api/pins/program_de10', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sof_path: selectedSof })
+        json: { sof_path: selectedSof },
+        auth: false,
       });
-      const result = await response.json();
-      if (response.ok) {
-        setUploadStatus('Плата DE10 успешно прошита!');
-      } else {
-        setUploadStatus('Ошибка прошивки: ' + (result.error || 'Неизвестная ошибка'));
-      }
-    } catch (error) {
-      setUploadStatus('Ошибка при прошивке: ' + error.message);
+      const json = await resp.json();
+      if (resp.ok) setUploadStatus('Плата DE10 успешно прошита!');
+      else setUploadStatus('Ошибка прошивки: ' + (json.error || 'Неизвестная ошибка'));
+    } catch (e) {
+      setUploadStatus('Ошибка: ' + e.message);
     }
   };
 
-  // Сохранить соединения в JSON
+  // Save: POST config, GET verilog, POST program
   const handleSave = async () => {
-    // Исключаем соединения отключённой периферии (чтобы сохранялось для всех пользователей)
-    const filtered = connections.filter(c => isPeripheralEnabled(c.peripheral));
-    const connectionsArr = filtered.map(({ de10Pin, peripheralPin }) => [de10Pin, peripheralPin]);
-    const payload = { connections: connectionsArr };
-    if (disabledPeripherals.length > 0) {
-      payload.disabled_peripherals = disabledPeripherals;
-    }
+    const connectionsArr = connections.map(({ de10Pin, peripheralPin }) => [de10Pin, peripheralPin]);
     try {
       setSaveStatus('Сохранение конфигурации...');
-      const saveResponse = await apiFetch('/pins/config', {
+      const saveResp = await apiFetch('/api/pins/config', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        json: { connections: connectionsArr },
+        auth: false,
       });
-      if (!saveResponse.ok) {
-        throw new Error('Failed to save configuration');
-      }
-      console.log('Configuration saved successfully');
+      if (!saveResp.ok) throw new Error('Failed to save configuration');
 
-      // 2. Генерация Verilog
       setSaveStatus('Генерация Verilog...');
-      console.log('Generating Verilog...');
-      const verilogResponse = await apiFetch('/pins/verilog');
-      const verilogData = await verilogResponse.json();
-      if (verilogData.verilog_code) {
-        console.log('Generated Verilog code:', verilogData.verilog_code);
-      } else {
-        console.error('No Verilog code in response');
-      }
+      const verilogResp = await apiFetch('/api/pins/verilog', { auth: false });
+      const verilogData = await verilogResp.json();
+      console.log('verilog', verilogData.verilog_code);
 
-      // 3. Программирование FPGA
       setSaveStatus('Программирование FPGA...');
-      console.log('Programming FPGA...');
-      const programResponse = await apiFetch('/pins/program', {
-        method: 'POST'
-      });
-      const programData = await programResponse.json();
-      
-      if (programResponse.ok) {
-        console.log('FPGA programming result:', programData.message);
+      const programResp = await apiFetch('/api/pins/program', { method: 'POST', auth: false });
+      const programJson = await programResp.json();
+      if (programResp.ok) {
         alert('Конфигурация успешно применена!');
       } else {
-        console.error('FPGA programming error:', programData.error);
-        throw new Error(programData.error || 'Failed to program FPGA');
+        throw new Error(programJson.error || 'Failed to program FPGA');
       }
-    } catch (error) {
-      console.error('Error in save process:', error);
-      alert('Ошибка применения конфигурации: ' + error.message);
+    } catch (e) {
+      alert('Ошибка применения конфигурации: ' + e.message);
     } finally {
       setSaveStatus('');
     }
   };
 
-  // Загрузить соединения из JSON (только официальные имена)
+  const normalizeImportedConnections = (importedConnections) => importedConnections
+    .map(connection => {
+      if (Array.isArray(connection) && connection.length === 2) {
+        const [de10Pin, peripheralPin] = connection;
+        const foundPeripheral = peripherals.find(peripheral => peripheral.pins.includes(peripheralPin));
+        return {
+          de10Pin,
+          peripheralPin,
+          peripheral: foundPeripheral?.name || ''
+        };
+      }
+
+      if (
+        connection
+        && typeof connection === 'object'
+        && typeof connection.de10Pin === 'string'
+        && typeof connection.peripheralPin === 'string'
+      ) {
+        const foundPeripheral = connection.peripheral
+          ? peripherals.find(peripheral => peripheral.name === connection.peripheral)
+          : peripherals.find(peripheral => peripheral.pins.includes(connection.peripheralPin));
+
+        return {
+          de10Pin: connection.de10Pin,
+          peripheralPin: connection.peripheralPin,
+          peripheral: foundPeripheral?.name || ''
+        };
+      }
+
+      return null;
+    })
+    .filter(Boolean);
+
+   const sanitizePeripheralLimits = (limitsCandidate = {}) => {
+    const nextLimits = {};
+    peripherals.forEach(peripheral => {
+      const maxPins = peripheral.pins.length;
+      const raw = limitsCandidate?.[peripheral.name];
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) {
+        nextLimits[peripheral.name] = maxPins;
+        return;
+      }
+      const rounded = Math.floor(parsed);
+      nextLimits[peripheral.name] = Math.min(maxPins, Math.max(0, rounded));
+    });
+    return nextLimits;
+  };
+
+  const enforcePeripheralLimits = (connectionsToCheck, limits) => {
+    const usedByPeripheral = {};
+    return connectionsToCheck.filter(connection => {
+      const max = limits[connection.peripheral];
+      if (!Number.isInteger(max)) return true;
+      const used = usedByPeripheral[connection.peripheral] || 0;
+      if (used >= max) return false;
+      usedByPeripheral[connection.peripheral] = used + 1;
+      return true;
+    });
+  };
+
+  // Load config
   const handleLoad = async () => {
     try {
-      const response = await apiFetch('/pins/config');
-      const data = await response.json();
-      if (Array.isArray(data.connections)) {
-        const newConnections = data.connections.map(([de10Pin, peripheralPin]) => {
-          let peripheral = '';
-          for (const p of peripherals) {
-            if (p.pins.includes(peripheralPin)) {
-              peripheral = p.name;
-              break;
-            }
-          }
-          return { peripheral, peripheralPin, de10Pin };
-        });
-        setConnections(newConnections);
-        if (Array.isArray(data.disabled_peripherals)) {
-          setDisabledPeripherals(data.disabled_peripherals);
-        }
+      const resp = await apiFetch('/api/pins/config', { auth: false });
+      const data = await resp.json();
+      const importedConnections = Array.isArray(data.connections) ? data.connections : [];
+      setConnections(normalizeImportedConnections(importedConnections));
+      if (data.peripheral_limits && typeof data.peripheral_limits === 'object') {
+        const sanitized = sanitizePeripheralLimits(data.peripheral_limits);
+        setPeripheralLimits(sanitized);
+        setLabLimitValues(sanitized);
       }
-    } catch (error) {
-      console.error('Error loading configuration:', error);
-      alert('Ошибка загрузки конфигурации');
+    } catch (e) {
+      console.error('Error loading config', e);
     }
   };
 
-  return (
-    <div className="app-container">
-      {/* Шапка: роли, вход, админ/лаборант */}
-      <header className="app-header">
-        <span className="role-badge">
-          {user ? `${user.login} (${user.role === 'admin' ? 'Админ' : 'Лаборант'})` : 'Пользователь'}
-        </span>
-        {user ? (
-          <button className="auth-btn" onClick={logout}>Выйти</button>
-        ) : (
-          <button className="auth-btn" onClick={() => setShowLoginModal(true)}>Войти (админ/лаборант)</button>
-        )}
-        {isAdmin && (
-          <div className="admin-panel">
-            <input type="file" accept=".csv" onChange={e => setAdminDe10File(e.target.files?.[0] || null)} />
-            <input type="file" accept=".csv" onChange={e => setAdminPerifFile(e.target.files?.[0] || null)} />
-            <button className="compile-btn small" onClick={handleAdminUploadTables} disabled={!adminDe10File || !adminPerifFile}>
-              Загрузить таблицы
-            </button>
-            {adminUploadStatus && <span className="admin-status">{adminUploadStatus}</span>}
-          </div>
-        )}
-      </header>
+  const exportConnections = () => {
+    const usedPeripherals = peripherals
+      .map(peripheral => ({
+        ...peripheral,
+        usedPins: connections
+          .filter(connection => connection.peripheral === peripheral.name)
+          .map(connection => connection.peripheralPin)
+      }))
+      .filter(peripheral => peripheral.usedPins.length > 0);
 
-      {/* Модальное окно входа */}
-      {showLoginModal && (
-        <div className="modal-overlay" onClick={() => setShowLoginModal(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <h3>Вход (админ / лаборант)</h3>
-            <form onSubmit={handleLogin}>
-              <input type="text" placeholder="Логин" value={loginForm.login} onChange={e => setLoginForm(f => ({ ...f, login: e.target.value }))} required />
-              <input type="password" placeholder="Пароль" value={loginForm.password} onChange={e => setLoginForm(f => ({ ...f, password: e.target.value }))} required />
-              {loginError && <div className="login-error">{loginError}</div>}
-              <button type="submit" className="compile-btn">Войти</button>
-              <button type="button" className="compile-btn" onClick={() => setShowLoginModal(false)}>Отмена</button>
-            </form>
-          </div>
-        </div>
-      )}
+    const configToExport = {
+      version: 1,
+      board: boardConfig,
+      peripherals: usedPeripherals,
+      connections: connections.map(({ de10Pin, peripheralPin, peripheral }) => ({
+        de10Pin,
+        peripheral,
+        peripheralPin
+      }))
+    };
 
-      {/* Видео окно */}
-      <div className="video-container">
-        <div className="video-placeholder">
-          Видео трансляция
+    const json = JSON.stringify(configToExport, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'fpga-scheme.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const handleImportConnections = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        const importedConnections = Array.isArray(parsed.connections) ? parsed.connections : [];
+        const importedLimits = sanitizePeripheralLimits(parsed.peripheralLimits || parsed.laborantLimits || {});
+        const normalizedConnections = normalizeImportedConnections(importedConnections);
+        const limitedConnections = enforcePeripheralLimits(normalizedConnections, importedLimits);
+
+        setPeripheralLimits(importedLimits);
+        setLabLimitValues(importedLimits);
+        setConnections(limitedConnections);
+        setSelectedPeripheral(null);
+        setSelectedDe10(null);
+        if (limitedConnections.length !== normalizedConnections.length) {
+          setSchemeStatus('Схема загружена, но часть связей отключена из-за лимитов лаборанта');
+        } else {
+          setSchemeStatus('Схема и лимиты успешно загружены из файла');
+        }
+      } catch (error) {
+        setSchemeStatus('Ошибка загрузки схемы: неверный JSON файл');
+      }
+    };
+
+    reader.readAsText(file);
+    event.target.value = '';
+  };
+
+  const openSchemeImportDialog = () => {
+    schemeFileInputRef.current?.click();
+  };
+
+  const canUsePeripheralPin = (peripheralName, peripheralPin) => {
+    const maxAllowed = peripheralLimits[peripheralName];
+    if (!Number.isInteger(maxAllowed)) return true;
+    const isAlreadyConnected = connections.some(
+      connection => connection.peripheral === peripheralName && connection.peripheralPin === peripheralPin
+    );
+    if (isAlreadyConnected) return true;
+    const usedCount = connections.filter(connection => connection.peripheral === peripheralName).length;
+    return usedCount < maxAllowed;
+  };
+
+  // ---- Board/Peripheral logic ----
+
+  const onPeripheralPinSelected = (peripheralName, peripheralPin) => {
+    if (!canUsePeripheralPin(peripheralName, peripheralPin)) {
+      setSchemeStatus(`Лимит для «${peripheralName}» исчерпан. Обратитесь к лаборанту или загрузите другую схему.`);
+      return;
+    }
+    if (pendingDe10Pin) {
+      setConnections(prev => {
+        const filtered = prev.filter(c =>
+          !(c.peripheral === peripheralName && c.peripheralPin === peripheralPin)
+          && !(c.de10Pin === pendingDe10Pin)
+        );
+        filtered.push({
+          peripheral: peripheralName,
+          peripheralPin,
+          de10Pin: pendingDe10Pin
+        });
+        return filtered;
+      });
+      setSelectedPeripheral(null);
+      setSelectedDe10(pendingDe10Pin);
+      setPendingDe10Pin(null);
+      setShowPeripheralMenu(false);
+      return;
+    }
+    setSelectedPeripheral({ peripheral: peripheralName, peripheralPin });
+      setSelectedDe10(null);
+      setPendingDe10Pin(null);
+      setShowPeripheralMenu(false);
+      setSchemeStatus('');
+  };
+
+  const handleBoardPinClick = (de10Pin) => {
+    if (nonInteractivePins.includes(de10Pin)) return;
+
+    if (selectedPeripheral) {
+      if (!canUsePeripheralPin(selectedPeripheral.peripheral, selectedPeripheral.peripheralPin)) {
+        setSchemeStatus(`Лимит для «${selectedPeripheral.peripheral}» исчерпан. Подключение недоступно.`);
+        setSelectedPeripheral(null);
+        return;
+      }
+      setConnections(prev => {
+        // remove any existing that matches peripheral+pin or de10Pin
+        const filtered = prev.filter(c =>
+          !(c.peripheral === selectedPeripheral.peripheral && c.peripheralPin === selectedPeripheral.peripheralPin)
+          && !(c.de10Pin === de10Pin)
+        );
+        filtered.push({
+          peripheral: selectedPeripheral.peripheral,
+          peripheralPin: selectedPeripheral.peripheralPin,
+          de10Pin
+        });
+        return filtered;
+      });
+      setSelectedPeripheral(null);
+      setSelectedDe10(de10Pin);
+      setPendingDe10Pin(null);
+    } else {
+      // no peripheral selected: if pin occupied -> remove, else just select/highlight
+      const existing = connections.find(c => c.de10Pin === de10Pin);
+      if (existing) {
+        setConnections(prev => prev.filter(c => c.de10Pin !== de10Pin));
+        setSelectedDe10(null);
+        setPendingDe10Pin(null);
+      } else {
+        setSelectedDe10(de10Pin);
+        setPendingDe10Pin(de10Pin);
+        setShowPeripheralMenu(true);
+      }
+    }
+  };
+
+   if (currentPage === '/login') {
+    return (
+      <div className="app-container auth-page">
+        <div className="auth-card">
+          <h1>Вход в систему</h1>
+          <p>Введите логин и пароль для доступа.</p>
+          <form className="auth-form" onSubmit={handleAuthSubmit}>
+            <label htmlFor="login">Логин</label>
+            <input id="login" name="login" type="text" placeholder="admin или lab" required />
+
+            <label htmlFor="password">Пароль</label>
+            <input id="password" name="password" type="password" placeholder="Пароль из users.json на сервере" required />
+
+            {authError && <div className="auth-error">{authError}</div>}
+
+            <button className="compile-btn" type="submit">Войти</button>
+            <button className="control-button" type="button" onClick={() => navigateTo('/')}>Вернуться на главную</button>
+          </form>
         </div>
       </div>
+    );
+  }
 
-      {/* Кнопки управления и Arduino MEGA */}
-      <div className={`peripheral-block ${!isPeripheralEnabled('Arduino MEGA') ? 'disabled' : ''}`} style={{ maxWidth: 1200, margin: '0 auto' }}>
-        <div className="but-arduino-grid" style={{ gridTemplateRows: '1fr 1fr' }}>
-          {/* Первый ряд — круглые кнопки управления */}
-          {buttonStates.map((btn, idx) => (
-            <div className="but-arduino-cell" key={`but-cell-${btn.id}`}> 
-              <button
-                className={`control-button round ${btn.pressed ? 'pressed' : ''}`}
-                onClick={() => toggleButton(btn.id)}
-              >
-                {btn.id}
-              </button>
-            </div>
-          ))}
-          {/* Второй ряд — пины Arduino MEGA */}
-          {Array.from({ length: 12 }).map((_, idx) => {
-            const pin = peripherals[0].pins[idx];
-            if (!pin) return <div className="but-arduino-cell" key={`pin-cell-empty-${idx}`}></div>;
-            const connected = connections.find(
-              (c) => c.peripheral === 'Arduino MEGA' && c.peripheralPin === pin
-            );
-            return (
-              <div className="but-arduino-cell" key={`pin-cell-${pin}`}> 
-                <button
-                  className={`pin-btn${connected ? ' connected' : ''}`}
-                  onClick={() => handlePinClick(0, idx)}
-                >
-                  {pin}
-                  {connected && <span className="de10-label">→ {connected.de10Pin}</span>}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-        <div className="peripheral-title">Панель кнопок</div>
-      </div>
-
-      {/* Лаборант: чекбоксы отключения периферии */}
-      {isLab && (
-        <div className="lab-disable-panel">
-          <span>Отключить периферию:</span>
-          {peripherals.map(p => (
-            <label key={p.name}>
-              <input type="checkbox" checked={disabledPeripherals.includes(p.name)} onChange={() => togglePeripheralDisabled(p.name)} />
-              {p.name}
-            </label>
-          ))}
-        </div>
-      )}
-
-      {/* Остальные периферии */}
-      <div className="peripherals-container">
-        {peripherals.slice(1).map((peripheral, pIdx) => (
-          <div className={`peripheral-row ${!isPeripheralEnabled(peripheral.name) ? 'disabled' : ''}`} key={peripheral.name}>
-            {peripheral.name === 'LED-массив' && (
-              <img src={lampImg} alt="LED-массив" className="peripheral-icon" />
-            )}
-            {peripheral.name === 'Семисегментник' && (
-              <img src={semiImg} alt="Семисегментник" className="peripheral-icon" />
-            )}
-            {peripheral.name === 'Сервопривод' && (
-              <img src={servoImg} alt="Сервопривод" className="peripheral-icon" />
-            )}
-            <div className="peripheral-block">
-              <div className="pins-list">
-                {peripheral.pins.map((pin, pinIdx) => {
-                  const connected = connections.find(
-                    (c) => c.peripheral === peripheral.name && c.peripheralPin === pin
-                  );
-                  return (
-                    <div key={pin} className="pin-container">
-                      <button
-                        className={`pin-btn${connected ? ' connected' : ''}`}
-                        onClick={() => handlePinClick(pIdx + 1, pinIdx)}
-                      >
-                        {pin}
-                        {connected && <span className="de10-label">→ {connected.de10Pin}</span>}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-              <div className="peripheral-title">{peripheral.name}</div>
-            </div>
+  if (currentPage === '/admin') {
+    if (authUser?.role !== 'admin') {
+      return (
+        <div className="app-container auth-page">
+          <div className="auth-card">
+            <h1>Доступ запрещён</h1>
+            <p>Для страницы администратора выполните вход под пользователем admin.</p>
+            <button className="compile-btn" type="button" onClick={() => navigateTo('/login')}>Перейти к входу</button>
           </div>
-        ))}
-      </div>
+        </div>
+      );
+    }
 
-      {/* Нижняя панель управления */}
-      <div className="bottom-controls">
-        <div className="file-upload-container">
+    return (
+      <div className="app-container auth-page">
+        <div className="auth-card admin-card">
+          <h1>Панель администратора</h1>
+          <p>Загрузка таблиц коммутации на сервер: <code>de10lite.csv</code> и <code>perif.csv</code> (валидация на API).</p>
+
+          <label className="file-upload-label" htmlFor="admin-de10-upload">de10lite.csv</label>
           <input
-            type="file"
-            id="file-upload"
-            onChange={handleFileUpload}
+            id="admin-de10-upload"
             className="file-input"
-            accept=".sof"
+            type="file"
+            accept=".csv"
+            onChange={handleAdminDe10Change}
           />
-          <label htmlFor="file-upload" className="file-upload-label">
-            {selectedFile ? selectedFile.name : 'Выберите .sof файл'}
-          </label>
-          {uploadStatus && (
-            <div className={`upload-status ${uploadStatus.includes('Ошибка') ? 'error' : 'success'}`}>
-              {uploadStatus}
+          {adminDe10File && <div className="upload-status success">de10lite: {adminDe10File.name}</div>}
+
+          <label className="file-upload-label" htmlFor="admin-perif-upload" style={{ marginTop: 12 }}>perif.csv</label>
+          <input
+            id="admin-perif-upload"
+            className="file-input"
+            type="file"
+            accept=".csv"
+            onChange={handleAdminPerifChange}
+          />
+          {adminPerifFile && <div className="upload-status success">perif: {adminPerifFile.name}</div>}
+
+          {adminUploadStatus && (
+            <div className={`upload-status ${adminUploadStatus.includes('успеш') ? 'success' : adminUploadStatus.includes('Ошиб') ? 'error' : ''}`}>
+              {adminUploadStatus}
             </div>
           )}
+
+          <div className="admin-actions">
+            <button className="compile-btn" type="button" onClick={handleAdminUploadTables}>
+              Загрузить на сервер
+            </button>
+            <button className="compile-btn" type="button" onClick={() => navigateTo('/')}>На главную</button>
+            <button
+              className="control-button"
+              type="button"
+              onClick={() => {
+                clearStoredAuth();
+                setAuthUser(null);
+                navigateTo('/login');
+              }}
+            >
+              Выйти
+            </button>
+          </div>
         </div>
-        <div style={{display:'flex', flexDirection:'column', gap:8}}>
-          <select
-            value={selectedSof}
-            onChange={e => setSelectedSof(e.target.value)}
-            style={{marginBottom:8, minWidth:220}}
-          >
-            <option value="">Выберите .sof файл для прошивки</option>
-            {sofFiles.map(f => (
-              <option key={f} value={f}>{f.split('/').pop()}</option>
+      </div>
+    );
+  }
+
+  if (currentPage === '/lab') {
+    if (authUser?.role !== 'lab_assistant') {
+      return (
+        <div className="app-container auth-page">
+          <div className="auth-card">
+            <h1>Доступ запрещён</h1>
+            <p>Для страницы лаборанта войдите под учётной записью с ролью лаборанта (логин <code>lab</code> по умолчанию).</p>
+            <button className="compile-btn" type="button" onClick={() => navigateTo('/login')}>Перейти к входу</button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="app-container auth-page">
+        <div className="auth-card admin-card">
+          <h1>Панель лаборанта</h1>
+          <p>Укажите, сколько устройств каждого типа должно остаться доступным пользователю (можно 0).</p>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {peripherals.map(peripheral => (
+              <label key={peripheral.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14 }}>
+                <span>{peripheral.name} (макс. {peripheral.pins.length})</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={peripheral.pins.length}
+                  value={labLimitValues[peripheral.name]}
+                  onChange={(event) => handleLabLimitChange(peripheral.name, event.target.value)}
+                  style={{ width: 100, height: 36, borderRadius: 8, border: '1px solid #7e9dcc', padding: '0 10px' }}
+                />
+              </label>
             ))}
-          </select>
-          <button 
-            className="compile-btn" 
-            onClick={handleProgramDe10}
-            disabled={!selectedSof}
+          </div>
+
+          {labValidationError && <div className="auth-error">{labValidationError}</div>}
+          {labExportStatus && <div className="upload-status success">{labExportStatus}</div>}
+
+          <div className="admin-actions">
+            <button className="compile-btn" type="button" onClick={applyLabLimits}>Применить лимиты</button>
+            <button className="compile-btn" type="button" onClick={exportLabConfig}>Скачать конфиг</button>
+            <button className="control-button" type="button" onClick={() => navigateTo('/')}>На главную</button>
+            <button
+              className="control-button"
+              type="button"
+              onClick={() => {
+                clearStoredAuth();
+                setAuthUser(null);
+                navigateTo('/login');
+              }}
+            >
+              Выйти
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="app-container">
+      <button className="admin-entry-btn" type="button" onClick={() => navigateTo('/login')}>
+        Вход для сотрудника
+      </button>
+
+      {/* Header with + and selected peripheral hint */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+        <h2 style={{ margin: 0, color: '#ffffff' }}>FPGA Pin Map</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {selectedPeripheral ? (
+            <div style={{ color: '#fff', fontWeight: 600 }}>
+              Выбрано: <span style={{ color: '#ffd54f' }}>{selectedPeripheral.peripheral} — {getPeripheralPinLabel(selectedPeripheral.peripheral, selectedPeripheral.peripheralPin)}</span>
+              <span style={{ marginLeft: 10, fontWeight: 400, color: '#ddd' }}>(Нажмите пин платы чтобы подключить)</span>
+            </div>
+          ) : pendingDe10Pin ? (
+            <div style={{ color: '#fff', fontWeight: 600 }}>
+              Выбран пин платы: <span style={{ color: '#ffd54f' }}>{pendingDe10Pin}</span>
+              <span style={{ marginLeft: 10, fontWeight: 400, color: '#ddd' }}>(Выберите пин периферии в открытом меню)</span>
+            </div>
+          ) : (
+            <div style={{ color: '#ddd' }}>Периферию можно выбрать по +</div>
+          )}
+          <button className="export-btn" onClick={exportConnections}>Сохранить схему</button>
+          <button className="export-btn" onClick={openSchemeImportDialog}>Загрузить схему</button>
+          <input
+            ref={schemeFileInputRef}
+            type="file"
+            accept="application/json,.json"
+            onChange={handleImportConnections}
+            style={{ display: 'none' }}
+          />
+          <button
+            className="control-button"
+            onClick={() => setShowPeripheralMenu(true)}
+            title="Открыть меню периферии"
+            style={{ fontSize: 18, padding: '6px 10px', borderRadius: 8 }}
           >
-            Программировать
+            +
           </button>
         </div>
-        <button 
-          className="compile-btn" 
-          onClick={handleSave}
-          disabled={saveStatus !== ''}
-        >
-          {saveStatus || 'Save'}
-        </button>
-        <button className="compile-btn" onClick={handleLoad}>Load</button>
       </div>
 
-      {/* Модальное окно выбора пина DE10-Lite */}
-      {showSelector && (
-        <div className="de10-modal">
-          <div className="de10-layout">
-            <img src={de10Image} alt="DE10-Lite" className="de10-img-vertical" />
-            <div className="de10-pins-scroll-area-fixed">
-              {de10PinsLeft.map((pin, idx) => (
-                <div className="de10-pin-row" key={pin + de10PinsRight[idx]}> 
-                  <span className="de10-pin-label left">{pin}</span>
-                  <button
-                    className={`de10-pin-dot${(pin === '5V' || pin === '3.3V' || pin === 'GND') ? ' power' : ''}${connections.some(c => c.de10Pin === pin) ? ' used' : ''}`}
-                    onClick={() => !connections.some(c => c.de10Pin === pin) && pin !== '5V' && pin !== '3.3V' && pin !== 'GND' && handleDe10PinSelect(pin)}
-                    disabled={connections.some(c => c.de10Pin === pin) || pin === '5V' || pin === '3.3V' || pin === 'GND'}
-                  />
-                  <button
-                    className={`de10-pin-dot${(de10PinsRight[idx] === '5V' || de10PinsRight[idx] === '3.3V' || de10PinsRight[idx] === 'GND') ? ' power' : ''}${connections.some(c => c.de10Pin === de10PinsRight[idx]) ? ' used' : ''}`}
-                    onClick={() => !connections.some(c => c.de10Pin === de10PinsRight[idx]) && de10PinsRight[idx] !== '5V' && de10PinsRight[idx] !== '3.3V' && de10PinsRight[idx] !== 'GND' && handleDe10PinSelect(de10PinsRight[idx])}
-                    disabled={connections.some(c => c.de10Pin === de10PinsRight[idx]) || de10PinsRight[idx] === '5V' || de10PinsRight[idx] === '3.3V' || de10PinsRight[idx] === 'GND'}
-                  />
-                  <span className="de10-pin-label right">{de10PinsRight[idx]}</span>
-                </div>
-              ))}
+      {/* CENTER: BoardMap */}
+      <BoardMap
+        leftPins={de10PinsLeft}
+        rightPins={de10PinsRight}
+        pinColorMap={pinColorMap}
+        pinTooltipMap={pinTooltipMap}
+        peripheralColorMap={peripheralColorMap}
+        nonInteractivePins={nonInteractivePins}
+        nonInteractiveColor={powerPinsHighlightColor}
+        selectedDe10={selectedDe10}
+        onPinClick={handleBoardPinClick}
+      />
+
+      {/* BOTTOM: сохраняем оригинальную нижнюю панель функционала */}
+      <div className="bottom-controls" style={{ marginTop: 18 }}>
+        <div className="file-upload-container">
+          <label className="file-upload-label" htmlFor="sof-upload">Выберите .sof файл</label>
+          <input id="sof-upload" className="file-input" type="file" accept=".sof" onChange={handleFileUpload} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <select value={selectedSof} onChange={e => setSelectedSof(e.target.value)} style={{ padding: 8, borderRadius: 6 }}>
+              <option value="">Выберите .sof файл для прошивки</option>
+              {sofFiles.map((f, idx) => <option key={idx} value={f}>{f}</option>)}
+            </select>
+            <button className="compile-btn" onClick={handleProgramDe10} disabled={!selectedSof}>Программировать</button>
+          </div>
+
+          <div style={{ marginTop: 8 }}>
+            <div className={`upload-status ${uploadStatus.toLowerCase().includes('ошиб') ? 'error' : ''} ${uploadStatus.toLowerCase().includes('успеш') ? 'success' : ''}`}>
+              {uploadStatus || 'Статус загрузки: —'}
             </div>
           </div>
-          <button className="close-btn" onClick={() => setShowSelector(false)}>Отмена</button>
         </div>
-      )}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
+          <button className="code-btn" onClick={handleSave} disabled={saveStatus !== ''}>{saveStatus || 'Save'}</button>
+          <div className={`upload-status ${schemeStatus.toLowerCase().includes('ошиб') ? 'error' : ''} ${schemeStatus.toLowerCase().includes('успеш') ? 'success' : ''}`}>
+            {schemeStatus || 'Статус схемы: —'}
+          </div>
+        </div>
+      </div>
+
+      {/* Peripheral menu modal */}
+      <PeripheralMenu
+        open={showPeripheralMenu}
+        onClose={() => {
+          setShowPeripheralMenu(false);
+          setPendingDe10Pin(null);
+        }}
+        peripherals={peripherals}
+        onSelectPeripheralPin={onPeripheralPinSelected}
+        connections={connections}
+        peripheralLimits={peripheralLimits}
+      />
     </div>
   );
 }

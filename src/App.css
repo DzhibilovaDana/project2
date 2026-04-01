@@ -38,6 +38,7 @@
 }
 
 .app-container {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -50,25 +51,81 @@
   gap: 20px;
 }
 
-/* Видео контейнер */
-.video-container {
-  width: 100%;
-  height: 300px;
-  background: #1a1a1a;
-  border-radius: 12px;
-  overflow: hidden;
-  margin-bottom: 20px;
+.admin-entry-btn {
+  position: absolute;
+  top: 0px;
+  right: -600px;
+  z-index: 20;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: rgba(18, 28, 48, 0.85);
+  color: #ffffff;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
-.video-placeholder {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
+.admin-entry-btn:hover {
+  background: rgba(28, 43, 72, 0.95);
+}
+
+.auth-page {
   justify-content: center;
-  font-size: 1.2em;
-  color: #666;
-  border: 2px dashed #444;
+  align-items: center;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 460px;
+  background: #2b3a58;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 14px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.24);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.admin-card {
+  max-width: 560px;
+}
+
+.auth-card h1 {
+  margin: 0;
+}
+
+.auth-card p {
+  margin: 0;
+  color: #d8e5ff;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.auth-form input {
+  height: 40px;
+  border-radius: 8px;
+  border: 1px solid #7e9dcc;
+  padding: 0 10px;
+  background: #f6f8ff;
+}
+
+.auth-error {
+  border: 1px solid #ff7f7f;
+  border-radius: 8px;
+  padding: 10px;
+  color: #ffd6d6;
+  background: rgba(128, 16, 16, 0.4);
+}
+
+.admin-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 10px;
 }
 
 /* Кнопки управления */
@@ -440,6 +497,36 @@
   flex-direction: column;
   align-items: stretch;
 }
+
+.peripheral-modal-window {
+  position: relative;
+  padding-top: 44px;
+}
+
+.modal-close-x {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #666;
+  border-radius: 8px;
+  background: #333;
+  color: #fff;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.modal-close-x:hover {
+  background: #555;
+  border-color: #ffe600;
+}
+
 .modal-title {
   font-size: 1.2em;
   font-weight: bold;
@@ -761,90 +848,287 @@
   min-height: 40px;
 }
 
-/* Шапка: роли и авторизация */
-.app-header {
+/* === BoardMap styles (добавлено) === */
+.board-container {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  flex-wrap: wrap;
   gap: 12px;
-  padding: 8px 12px;
-  background: rgba(0,0,0,0.2);
-  border-radius: 8px;
-  margin-bottom: 12px;
+  margin: 6px 0 18px 0;
 }
-.role-badge {
-  font-weight: 600;
-  margin-right: auto;
-}
-.auth-btn {
-  padding: 6px 14px;
-  background: #4a7ba7;
-  border: none;
-  border-radius: 6px;
-  color: #fff;
-  cursor: pointer;
-  font-size: 0.95em;
-}
-.auth-btn:hover { background: #5a8bb7; }
-.admin-panel {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.admin-panel input[type="file"] { font-size: 0.85em; max-width: 140px; }
-.admin-status { font-size: 0.9em; color: #ffe600; }
-.compile-btn.small { padding: 6px 10px; font-size: 0.9em; }
 
-/* Модальное окно входа */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.5);
+.board-inner {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  gap: 18px;
+  width: 100%;
+  max-width: 1100px;
 }
-.modal-content {
-  background: #2a2a2a;
-  padding: 24px;
-  border-radius: 12px;
-  min-width: 300px;
-}
-.modal-content h3 { margin: 0 0 16px 0; }
-.modal-content form { display: flex; flex-direction: column; gap: 12px; }
-.modal-content input {
-  padding: 10px 12px;
-  border-radius: 6px;
-  border: 1px solid #444;
-  background: #1a1a1a;
-  color: #fff;
-}
-.login-error { color: #ff6b6b; font-size: 0.9em; }
 
-/* Панель лаборанта: отключение периферии */
-.lab-disable-panel {
+.board-inner.header-focus {
+  max-width: 760px;
+}
+
+.pins-column {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 140px;
+  align-items: center;
+}
+
+.pins-left { order: 0; }
+.pins-right { order: 2; }
+
+/* визуальная плата */
+.board-visual {
+  flex: 1;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding: 10px 14px;
-  background: rgba(0,0,0,0.15);
+  justify-content: center;
+  min-height: 220px;
+  max-height: 520px;
+  position: relative;
+  order: 1;
+  padding: 6px;
+}
+
+.board-image-wrapper {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  position: relative;
+}
+
+.board-image {
+  max-width: 520px;
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.3);
+  object-fit: contain;
+  background: linear-gradient(180deg, #0b3b6f, #103b6f);
+}
+
+/* пины */
+/*
+  === НАСТРОЙКА ИНТЕРАКТИВНОЙ НАКЛАДКИ НА ПЛАТУ ===
+  .board-header-hotspot:
+    - right / top      -> положение всей интерактивной панели на фото платы
+    - width / height   -> общий размер интерактивной панели
+    - padding          -> внутренние отступы панели до пинов
+    - border / radius  -> рамка и скругление панели
+
+  .header-row-compact:
+    - gap              -> расстояние между левым и правым пином в одной строке
+
+  .header-pin-dot.compact:
+    - width / height   -> размер каждого маленького пина
+    - border-radius    -> форма пина (50% = круг)
+    - border           -> обводка пина
+*/
+.board-header-hotspot {
+  position: absolute;
+  right: 21.5%;
+  top: 13.5%;
+  width: 65px;
+  height: 74%;
+  border: 3px solid rgba(255, 64, 64, 0.85);
   border-radius: 8px;
+  background: rgba(18, 24, 39, 0.2);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-evenly;
+  padding: 6px 5px;
+  cursor: pointer;
+  box-shadow: 0 0 14px rgba(255, 64, 64, 0.3);
+}
+
+.board-header-hotspot:hover {
+  background: rgba(18, 24, 39, 0.34);
+  box-shadow: 0 0 18px rgba(255, 64, 64, 0.5);
+}
+
+.header-row-compact {
+  display: flex;
+  justify-content: space-between;
+  gap: 2px;
+}
+
+.header-pin-dot {
+  width: 100%;
+  min-height: 30px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.28);
+  background: radial-gradient(circle at 35% 35%, #ffe493 0%, #cca95f 45%, #745626 100%);
+  color: #1d1504;
+  font-size: 0.76rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform .12s ease, box-shadow .14s ease;
+}
+
+.header-pin-dot.compact {
+  width: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid #9a7538;
+  padding: 0;
+}
+
+.header-pin-dot.selected {
+  transform: scale(1.06);
+  box-shadow: 0 0 0 2px rgba(255,212,79,0.7);
+}
+
+.header-pin-dot.non-interactive {
+  cursor: not-allowed;
+}
+
+.header-focus-panel {
+  width: 100%;
+  max-width: 680px;
+  background: linear-gradient(180deg, #193f73 0%, #0f315f 100%);
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.22);
+  box-shadow: 0 12px 30px rgba(0,0,0,0.34);
+  padding: 16px;
+}
+
+.header-focus-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 12px;
 }
-.lab-disable-panel label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+
+.header-focus-title-row h3 {
+  margin: 0;
+  color: #fff;
+}
+
+.header-focus-close {
+  border: 1px solid rgba(255,255,255,0.35);
+  background: #2b4f83;
+  color: #fff;
+  border-radius: 8px;
+  padding: 8px 12px;
   cursor: pointer;
+}
+
+.header-focus-grid {
+  background: rgba(8, 15, 31, 0.32);
+  border-radius: 12px;
+  padding: 14px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.header-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.header-pin-cell {
+  display: flex;
+}
+
+.header-pin-empty {
+  width: 100%;
+  min-height: 30px;
+}
+
+.board-pin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 76px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.12);
+  cursor: pointer;
+  font-weight: 700;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.14s;
+  background: linear-gradient(180deg,#2f8e4b,#27ae60); /* default free = green */
+  color: #06320b;
+  box-shadow: 0 6px 10px rgba(39,174,96,0.12);
+}
+
+/* если пин имеет кастомный цвет (inline-style задаёт фон и цвет), это класс только для мелких эффектов */
+.board-pin.has-color {
+  border: 0;
+}
+
+/* выбранный пин (обводка) */
+.board-pin.selected {
+  transform: translateY(-4px);
+  outline: 3px solid rgba(255,202,40,0.22);
+}
+
+.board-pin.non-interactive {
+  cursor: not-allowed;
+  border: 1px solid rgba(255,255,255,0.4);
+}
+
+/* если пин свободен, используем спокойный стиль */
+.board-pin.free {
+  background: linear-gradient(180deg,#2f8e4b,#27ae60);
+  color: #06320b;
+}
+
+/* легенда */
+.board-legend {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  color: #fff;
+  font-size: 0.95em;
+  margin-top: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.legend-item {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  background: rgba(0,0,0,0.08);
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+
+.legend-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.25);
+}
+
+.legend-name {
+  color: #fff;
+  font-weight: 600;
   font-size: 0.95em;
 }
 
-/* Отключённая периферия (для лаборанта) */
-.peripheral-row.disabled,
-.peripheral-block.disabled {
-  opacity: 0.5;
-  pointer-events: none;
+/* адаптив */
+@media (max-width: 880px) {
+  .pins-column { width: 100px; }
+  .board-image { max-width: 360px; }
+}
+@media (max-width: 560px) {
+  .board-inner { flex-direction: column; gap: 12px; }
+  .pins-column { flex-direction: row; flex-wrap: wrap; width: auto; justify-content:center; }
+  .board-visual { order: 2; }
 }
